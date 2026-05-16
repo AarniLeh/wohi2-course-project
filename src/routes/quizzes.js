@@ -6,6 +6,15 @@ const isOwner = require("../middleware/isOwner");
 
 const multer = require("multer");
 const path = require("path");
+const {NotFoundError, ValidationError} = require("../lib/errors");
+const { z } = require("zod");
+
+const QuizInput = z.object({
+  title: z.string().min(1),
+  date: z.string().date(),
+  content: z.string().min(1),
+  keywords: z.union([z.string(), z.array(z.string())]).optional(),
+});
 
 const storage = multer.diskStorage({
   destination: path.join(__dirname, "..", "..", "public", "uploads"),
@@ -42,10 +51,23 @@ function formatQuiz(quiz) {
 
 router.use(authenticate);
 
+router.use((err, req, res, next) => {
+  if (err instanceof multer.MulterError ||
+      err?.message === "Only image files are allowed") {
+    return res.status(400).json({ msg: err.message });
+  }
+  next(err); // pass through to global handler
+});
+
+fileFilter: (req, file, cb) => {
+  if (file.mimetype.startsWith("image/")) cb(null, true);
+  else cb(new ValidationError("Only image files are allowed"));
+},
+
 // GET /quizzes 
 // List all quizzes
 router.get("/", async (req, res) => {
-  const {keyword} = req.query;    //change??
+  const {keyword} = req.query;
 
   const where = keyword
     ? { keywords: { some: { name: keyword } } }
@@ -93,9 +115,7 @@ router.get("/:quizId", async (req, res) => {
     });
 
   if (!quiz) {
-    return res.status(404).json({ 
-		message: "Quiz not found" 
-    });
+    throw new NotFoundError("Quiz not found");
   }
 
   res.json(formatQuiz(quiz));
@@ -105,12 +125,7 @@ router.get("/:quizId", async (req, res) => {
 // POST /quizzes
 // Create a new quiz
 router.post("/", upload.single("image"), async (req, res) => {
-  const { question, answer, date, keywords } = req.body;
-
-  if (!question || !answer) {
-    return res.status(400).json({ msg: 
-	"question, answer and date are mandatory" });
-  }
+  const { question, answer, date, keywords } = QuizInput.parse(req.body); // throws ZodError on failure
   
   const keywordsArray = Array.isArray(keywords) ? keywords : [];
   const imageUrl = req.file ? `/uploads/${req.file.filename}` : null;
@@ -136,14 +151,14 @@ router.post("/", upload.single("image"), async (req, res) => {
 // Edit a quiz
 router.put("/:quizId", upload.single("image"), isOwner, async (req, res) => {
   const quizId = Number(req.params.quizId);
-  const { question, answer, date, keywords } = req.body;
+  const { question, answer, date, keywords } = QuizInput.parse(req.body);
   const existingQuiz = await prisma.quiz.findUnique({ where: { id: quizId } });
   if (!existingQuiz) {
-    return res.status(404).json({ message: "Quiz not found" });
+    throw new NotFoundError("Quiz not found");
   }
 
   if (!question || !answer) {
-    return res.status(400).json({ msg: "question, answer and date are mandatory" });
+    throw new ValidationError("question, answer and date are mandatory");
   }
   
   const imageUrl = req.file ? `/uploads/${req.file.filename}` : null;
@@ -179,7 +194,7 @@ router.delete("/:quizId", isOwner, async (req, res) => {
   });
 
   if (!quiz) {
-    return res.status(404).json({ message: "Quiz not found" });
+    throw new NotFoundError("Quiz not found");
   }
 
   await prisma.quiz.delete({ where: { id: quizId } });
@@ -196,9 +211,7 @@ router.post("/:quizId/play", async (req, res) => {
   const { answer } = req.body;
 
   if (!answer) {
-    return res.status(400).json({
-      message: "answer is required",
-    });
+    throw new ValidationError("answer is required");
   }
   
   const quiz = await prisma.quiz.findUnique({
@@ -206,9 +219,7 @@ router.post("/:quizId/play", async (req, res) => {
   });
 
   if (!quiz) {
-    return res.status(404).json({
-      message: "Quiz not found",
-    });
+    throw new NotFoundError("Quiz not found");
   }
 
   const correct =
@@ -250,7 +261,7 @@ router.delete("/:quizId/play", async (req, res) => {
 
     const quiz = await prisma.quiz.findUnique({ where: { id: quizId } });
     if (!quiz) {
-        return res.status(404).json({ message: "Quiz not found" });
+        throw new NotFoundError("Quiz not found");
     }
 
     await prisma.play.deleteMany({

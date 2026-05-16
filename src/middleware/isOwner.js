@@ -7,13 +7,11 @@ async function isOwner (req, res, next) {
       include: { keywords: true },
     });
 
-    if (!quiz) {
-      return res.status(404).json({ message: "Quiz not found" });
-    }
+const { NotFoundError, ForbiddenError } = require("../lib/errors");
 
-    if (quiz.userId !== req.user.userId) {
-      return res.status(403).json({ error: "You can only modify your own quizzes" });
-    }
+if (!post) throw new NotFoundError("Quiz not found");
+if (post.userId !== req.user.userId)
+  throw new ForbiddenError("You can only modify your own quizzes");
 
     // Attach the record to the request so the route handler can reuse it
     req.quiz = quiz;
